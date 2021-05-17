@@ -35,7 +35,7 @@ typedef DWORD(WINAPI* PFZWQUERYINFORMATIONPROCESS) (
 	PULONG		ReturnLength
 	);
 
-namespace security
+namespace umium::security
 {	
 	std::function<void(void)> ProtectionThread = []()
 	{
