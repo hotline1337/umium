@@ -11,7 +11,7 @@
 #pragma comment(lib,"Wininet.lib")
 
 #include "../import.hpp"
-#include "../h/security.h"
+#include "../h/umium.h"
 #include "../h/xorstr.h"
 
 #pragma warning(disable : 4838)
