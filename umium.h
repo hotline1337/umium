@@ -31,7 +31,7 @@ namespace typedefs
 	} SYSTEM_INFORMATION_CLASS;
 }
 
-namespace security
+namespace umium::security
 {
 	extern auto block_api(const char* libName, const char* apiName)->DWORD;
 	
