@@ -47,6 +47,7 @@ const auto perform_checks = [&]() /* lambda */
 	if (umium::security::check_kernel_drivers() != 0 || umium::security::check_titan_hide() != 0)
 	{
 		// we can add a message here to inform the user to unload the driver or disable test signing
+		// edit: added message with a driver name to check_kernel_drivers function (umium.cpp)
 		LI_FN(TerminateProcess)(LI_FN(GetCurrentProcess).get()(), 0);
 	}
 	if (gmh("vehdebug-x86_64.dll") || gmh("winhook-x86_64.dll") || gmh("luaclient-x86_64.dll") || gmh("allochook-x86_64.dll")
