@@ -138,7 +138,36 @@ namespace umium::security
 	};
 	std::function<int(void)> check_kernel_drivers = []()
 	{
-		//anti-paste
+		LPVOID drivers[1024];
+		DWORD cb_needed;
+
+		if (LI_FN(K32EnumDeviceDrivers).get()(drivers, sizeof(drivers), &cb_needed) && cb_needed < sizeof(drivers))
+		{
+			wchar_t szDriver[1024];
+			const wchar_t* bl_driver_list[] = { L"kprocesshacker.sys", L"SbieSvc.sys", L"HttpDebuggerSdk.sys", L"dbk64.sys",
+			L"dbk32.sys", L"SharpOD_Drv.sys" }; /* unicode anyways */
+
+			const int c_drivers = cb_needed / sizeof(drivers[0]);
+
+			for (auto i = 0; i < c_drivers; i++)
+			{
+				if (LI_FN(K32GetDeviceDriverBaseNameW).get()(drivers[i], szDriver, sizeof(szDriver) / sizeof(szDriver[0])))
+				{
+					for (const auto* driver_name : bl_driver_list)
+					{
+						if (wcscmp(szDriver, driver_name) == 0) 
+						{
+							std::wstring ws(driver_name);
+							std::string str(ws.begin(), ws.end());
+							std::string output = xorstr_("Detected blacklisted driver loaded (") + str + xorstr_("). Please unload it from memory.");
+
+							LI_FN(MessageBoxA)(nullptr, output.c_str(), xorstr_("umium"), MB_ICONERROR | MB_OK);
+							return 0x4171;
+						}
+					}
+				}
+			}
+		}
 		return 0;
 	};
 	std::function<int(void)> check_titan_hide = []()
