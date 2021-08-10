@@ -8,29 +8,7 @@ This code has been made and optimized for a [C++/CLI](https://docs.microsoft.com
 
 ## Usage
 
-```cpp
-#include "umium.h"
-
-// any form of a function
-// my example
-std::function<void(void)> check = [&]()
-{
-    umium::security::anti_attach();
-}
-
-auto main(void)
-{
-    Console::WriteLine("Starting multi-thread");
-    multi_thread obj([]
-    {
-	    check();
-	    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    });
-    Console::ReadKey();
-}
-
-
-```
+![](https://i.imgur.com/U7jl0PF.png)
 
 ## Contributing
 Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
