@@ -17,3 +17,8 @@ Please make sure to update tests as appropriate.
 
 ## License
 [MIT](https://choosealicens.com/licenses/mit/)
+
+## 💵 Want to buy me a Coffee?
+     - Donate BTC at `bc1q07aq4n66mz3f3z56lm72sug6rvfm6qp3cydcs7`
+     - Donate ETH at `0x4c9e8710b931f580B5d776c7989CE6e323ed1b34`
+     - Donate LTC at `LgtxE9ybYhtm7NTrMBjUNQYoJs9tGGrEyC`
