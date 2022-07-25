@@ -49,5 +49,5 @@ namespace umium::security
 	extern std::function<int(void)> check_kernel_drivers;
 	
 	extern int __stdcall check_dbg_print();
-	//extern std::function<int(void)> check_dbg_print();
+	extern std::void_t<> check_guard_hook();
 }

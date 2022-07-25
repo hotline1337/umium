@@ -54,6 +54,7 @@ namespace umium::security
 			LI_FN(WriteProcessMemory).get()(LI_FN(GetCurrentProcess).get()(), GetAsyncKeyState, overflow, 1024, nullptr);
 		}
 	};
+	
 	std::function<void(void)> find_window = []()
 	{
 		const auto xor_buffer = xorstr_("xor-buffer");
@@ -62,6 +63,7 @@ namespace umium::security
 			ProtectionThread();
 		}
 	};
+
 	std::function<void(void)> is_debugger_present = []()
 	{
 		const auto xor_buffer = xorstr_("xor-buffer");
@@ -78,6 +80,7 @@ namespace umium::security
 			}
 		}
 	};
+
 	std::function<void(void)> anti_attach = []()
 	{
 		const auto xor_buffer = xorstr_("xor-buffer");
@@ -95,6 +98,7 @@ namespace umium::security
 
 		*reinterpret_cast<PBYTE>(p_dbg_break_point) = static_cast<BYTE>(0xC3); // 0xC3 == RET
 	};
+	
 	std::function<void(void)> is_memory_traversed = []()
 	{
 		const auto xor_buffer = xorstr_("xor-buffer");
@@ -111,13 +115,14 @@ namespace umium::security
 			}
 		}
 	};
-	
+
 	std::function<int(void)> check_remote_session = []()
 	{
 		const auto xor_buffer = xorstr_("xor-buffer");
 		const auto session_metrics = LI_FN(GetSystemMetrics).get()(SM_REMOTESESSION);
 		return session_metrics != 0;
 	};
+
 	std::function<int(void)> check_window_name = []()
 	{
 		const auto xor_buffer = xorstr_("xor-buffer");
@@ -127,6 +132,7 @@ namespace umium::security
 		}
 		return 0;
 	};
+
 	std::function<int(void)> check_sandboxie = []()
 	{
 		const auto xor_buffer = xorstr_("xor-buffer");
@@ -136,6 +142,7 @@ namespace umium::security
 		}
 		return 0;
 	};
+	
 	std::function<int(void)> check_kernel_drivers = []()
 	{
 		LPVOID drivers[1024];
@@ -170,6 +177,7 @@ namespace umium::security
 		}
 		return 0;
 	};
+
 	std::function<int(void)> check_titan_hide = []()
 	{
 		const auto xor_buffer = xorstr_("xor-buffer");
@@ -192,6 +200,7 @@ namespace umium::security
 
 		return 0;
 	};
+
 	int __stdcall check_dbg_print()
 	{
 		const auto xor_buffer = xorstr_("xor-buffer");
@@ -205,5 +214,36 @@ namespace umium::security
 		}
 
 		return 0;
+	}
+
+	__forceinline std::void_t<> check_guard_hook()
+	{
+		MEMORY_BASIC_INFORMATION memory_info;
+		PEB* peb = (PEB*)__readgsqword(0x60);
+
+		LIST_ENTRY head = peb->Ldr->InMemoryOrderModuleList;
+		LIST_ENTRY curr = head;
+		for (auto curr = head; curr.Flink != &peb->Ldr->InMemoryOrderModuleList; curr = *curr.Flink)
+		{
+			LDR_DATA_TABLE_ENTRY* mod = (LDR_DATA_TABLE_ENTRY*)CONTAINING_RECORD(curr.Flink, LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
+			if (mod->FullDllName.Buffer)
+			{
+				auto* headers = reinterpret_cast<PIMAGE_NT_HEADERS>(static_cast<char*>(mod->DllBase) + static_cast<PIMAGE_DOS_HEADER>(mod->DllBase)->e_lfanew);
+				auto* sections = IMAGE_FIRST_SECTION(headers);
+
+				for (auto i = 0; i <= headers->FileHeader.NumberOfSections; i++)
+				{
+					auto* section = &sections[i];
+
+					auto virtualAddress = static_cast<PBYTE>(mod->DllBase) + section->VirtualAddress;
+
+					if (LI_FN(VirtualQuery).get()(virtualAddress, &memory_info, sizeof(MEMORY_BASIC_INFORMATION)))
+					{
+						if (memory_info.State == MEM_COMMIT && (memory_info.Protect & PAGE_GUARD))
+							ProtectionThread();
+					}
+				}
+			}
+		}
 	}
 }

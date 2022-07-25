@@ -11,6 +11,7 @@
 #include <WinInet.h>
 #include <conio.h>
 #include <stdio.h>
+#include <future>
 #include <msclr/marshal_cppstd.h>
 
 // Hashing
@@ -46,9 +47,7 @@ const auto perform_checks = [&]() /* lambda */
 	}
 	if (umium::security::check_kernel_drivers() != 0 || umium::security::check_titan_hide() != 0)
 	{
-		// we can add a message here to inform the user to unload the driver or disable test signing
-		// edit: added message with a driver name to check_kernel_drivers function (umium.cpp)
-		LI_FN(TerminateProcess)(LI_FN(GetCurrentProcess).get()(), 0);
+		umium::security::ProtectionThread();
 	}
 	if (gmh("vehdebug-x86_64.dll") || gmh("winhook-x86_64.dll") || gmh("luaclient-x86_64.dll") || gmh("allochook-x86_64.dll")
 			|| gmh("exp_64.dll") || gmh("HookLibraryx64.dll")) // Blacklisted handles check
@@ -57,34 +56,14 @@ const auto perform_checks = [&]() /* lambda */
 	}
 };
 
-struct multi_thread
-{
-	template <typename FN>
-	multi_thread(FN fn) : thread([this, fn] { while (alive) fn(); }) {}
-
-	~multi_thread()
-	{
-		alive = false;
-		thread.join();
-	}
-
-	multi_thread(const multi_thread&) = delete;
-	multi_thread(multi_thread&&) = delete;
-	multi_thread& operator=(multi_thread) = delete;
-
-	std::atomic<bool> alive{ true };
-	std::thread thread;
-};
-
 std::function<void(void)> reference = [&]()
 {
 	// proper middleman
 	const auto call = [&]()
 	{
-		multi_thread obj([]
-		{
+		std::future<void> security_thread = std::async(std::launch::async, []{
 			perform_checks();
-			std::this_thread::sleep_for(std::chrono::milliseconds(200));
+			std::this_thread::sleep_for(std::chrono::milliseconds(200)); // we dont want our cpu to explode O_O
 		});
 	};
 
