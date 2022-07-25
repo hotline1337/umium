@@ -1,10 +1,21 @@
-# Umium
+<p align="center">
+  <img width="256" heigth="256" src="docs\bg.png">
+<h1 align="center">Umium</h1>
+<p align="center">
+  <strong>Umium</strong> is a class containing Anti-RE, Anti-Debug and Anti-Hook methods. Easy to use and easy to implement.</strong> It is made to work precisely on <a href="https://docs.microsoft.com/en-us/cpp/dotnet/dotnet-programming-with-cpp-cli-visual-cpp">C++/CLI</a> runtime.
+</p>
+</p>
+<p align="center">
+  <img src="https://forthebadge.com/images/badges/built-with-love.svg" alt="appveyor-ci" />
+  <img src="https://forthebadge.com/images/badges/made-with-c-plus-plus.svg" alt="appveyor-ci" />
+</p>
+</p>
 
-Class containing Anti-RE, Anti-Debug and Anti-Hook methods. Easy to use and easy to implement.
+</br></br>
 
 ## Disclaimer
 
-This code has been made and optimized for a [C++/CLI](https://docs.microsoft.com/en-us/cpp/dotnet/dotnet-programming-with-cpp-cli-visual-cpp?view=msvc-160) runtime.
+This code has been made and optimized for a [C++/CLI](https://docs.microsoft.com/en-us/cpp/dotnet/dotnet-programming-with-cpp-cli-visual-cpp) runtime.
 
 ## Usage
 
