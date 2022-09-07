@@ -59,7 +59,7 @@ namespace umium
 	}
 	namespace utils
 	{
-		LAZY_IMPORTER_FORCEINLINE const PEB* get_peb() noexcept
+		UMIUM_FORCEINLINE const PEB* get_peb() noexcept
 		{
 			#if defined(_M_X64) || defined(__amd64__)
         		return reinterpret_cast<const PEB*>(__readgsqword(0x60));
