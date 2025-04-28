@@ -1,5 +1,23 @@
 /*
-/* Forcefully terminates the process using multiple methods to ensure it exits immediately. 
+ * Copyright 2022 - 2025 | hotline1337
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "umium.hpp"
+
+/*
+/* Forcefully terminates the process using multiple methods to ensure it exits immediately.
 /* Acts as an emergency kill switch in case of security violations or debugging attempts.
 */
 auto umium::trigger() const -> std::void_t<>
@@ -16,8 +34,15 @@ auto umium::trigger() const -> std::void_t<>
 
 umium::umium() :
 
+/*
+/* Initializes security mechanisms.
+/* Ensures early protection is active before any potential tampering occurs.
+*/
 start([this]() -> bool
 {
+	/* change base image size to prevent memory dumps */
+	this->change_image_size();
+
 	/* dispatch threads before patching NtContinue & co. */
 	this->dispatch_threads();
 
@@ -29,29 +54,8 @@ start([this]() -> bool
 	return true;
 }),
 
-security_callback([this](const std::wstring& reason) -> bool
-{
-	static bool TriggeredCallback = false;
-
-	if (!TriggeredCallback)
-	{
-		// You can use the reason parameters to debug the security in case
-		// something weird starts going on with it.
-		std::wofstream file(L"loader.err");
-		file.write(reason.c_str(), reason.size());
-		file.close();
-
-		// The process will straight up die on Release mode.
-		// Compile with FuckMSVC to debug this.
-		ExitProcess(rand() % RAND_MAX);
-
-		TriggeredCallback = true;
-	}
-	return true;
-}),
-
 /*
-/* Dispatches multiple security monitoring threads to run periodic checks. 
+/* Dispatches multiple security monitoring threads to run periodic checks.
 /* Continuously validates system integrity and looks for signs of tampering or debugging.
 */
 dispatch_threads([this]() -> std::void_t<>
@@ -73,52 +77,53 @@ dispatch_threads([this]() -> std::void_t<>
 }),
 
 /*
-/* Patches critical debug functions in `ntdll.dll` like `DbgUiRemoteBreakin`, `DbgBreakPoint`, and `NtContinue`. 
+/* Patches critical debug functions in `ntdll.dll` like `DbgUiRemoteBreakin`, `DbgBreakPoint`, and `NtContinue`.
 /* Makes it harder for debuggers to attach or manipulate the process by forcing an exit if called.
 */
 patch_debug_functions([this]() -> std::void_t<>
 {
-	const auto module = GetModuleHandleW(L"ntdll.dll");
+	const auto ntdll_handle = GetModuleHandleW(L"ntdll.dll");
+	if (!ntdll_handle)
+		return;
 
-	if (!module)
-		this->security_callback(L"Failed to initialize.");
+	const FARPROC p_dbg_break_point = GetProcAddress(ntdll_handle, "DbgBreakPoint");
+	const FARPROC p_dbg_ui_remote_breakin = GetProcAddress(ntdll_handle, "DbgUiRemoteBreakin");
+	if (!p_dbg_break_point || !p_dbg_ui_remote_breakin)
+		return;
 
-	// Grab exports from ntdll.dll
-	const auto export_dbg_ui_remote_breakin = reinterpret_cast<uintptr_t>(GetProcAddress(module, "DbgUiRemoteBreakin"));
-	const auto export_dbg_break_point = reinterpret_cast<uintptr_t>(GetProcAddress(module, "DbgBreakPoint"));
-
-	// Most plugins for OllyDBG / IDA only fix DbgUiRemoteBreakin/DbgBreakPoint,
-	// however, NtContinue is never touched although it is used.
-	// This should prevent any such plugins from effectively attaching the debugger.
-	// NOTE: This does not work on x64dbg for whatever reason..
-	const auto export_nt_continue = reinterpret_cast<uintptr_t>(GetProcAddress(module, "NtContinue"));
-
-	// Ensure that the program gets closed if a debugger is attached.
-	uintptr_t exports[] = {
-		export_dbg_ui_remote_breakin,
-		export_dbg_break_point,
-		export_nt_continue // This causes a lot of crashes ATM while debugging, leave this out till release.
+	const FARPROC exports[] = {
+		p_dbg_break_point,
+		p_dbg_ui_remote_breakin
 	};
 
-	for (const auto& it : exports)
+	for (const auto& export_address : exports)
 	{
 		unsigned long old_protection;
-		if (!VirtualProtect(reinterpret_cast<void*>(it), sizeof(uintptr_t) + 1, PAGE_EXECUTE_READWRITE, &old_protection))
-		{
-			this->security_callback(L"Failed to initialize.");
+		if (!VirtualProtect(reinterpret_cast<void*>(export_address), sizeof(uintptr_t) + 1, PAGE_EXECUTE_READWRITE, &old_protection))
 			return;
-		}
 
-		// Patch to __asm { jmp oExitProcess; };
-		*reinterpret_cast<uint8_t*>(it) = 0xE9;
-		*reinterpret_cast<uintptr_t*>(it + 1) = reinterpret_cast<uintptr_t>(ExitProcess);
+		*reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(export_address)) = static_cast<uint8_t>(0xE9);
+		*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(export_address) + 1) = reinterpret_cast<uintptr_t>(ExitProcess);
 
-		VirtualProtect(reinterpret_cast<void*>(it), sizeof(uintptr_t) + 1, old_protection, &old_protection);
+		VirtualProtect(reinterpret_cast<void*>(export_address), sizeof(uintptr_t) + 1, old_protection, &old_protection);
 	}
 }),
 
 /*
-/* Disables the ability to load non-Microsoft signed binaries into the process. 
+/* Modifies the image size field of the process's PEB loader entry.
+/* This obfuscates memory layout information to prevent memory scanners and debuggers.
+*/
+change_image_size([this]() -> std::void_t<>
+{
+	const auto peb = reinterpret_cast<PEB*>(__readgsqword(0x60));
+	const auto load_order = static_cast<LIST_ENTRY*>(peb->Ldr->Reserved2[1]);
+	const auto table_entry = reinterpret_cast<LDR_DATA_TABLE_ENTRY*>(reinterpret_cast<char*>(load_order) - reinterpret_cast<unsigned long long>(&static_cast<LDR_DATA_TABLE_ENTRY*>(nullptr)->Reserved1[0]));
+	const auto entry_size = reinterpret_cast<unsigned long*>(&table_entry->Reserved3[1]);
+	*entry_size = static_cast<unsigned long>(reinterpret_cast<long long>(table_entry->DllBase) + 0x100000);
+}),
+
+/*
+/* Disables the ability to load non-Microsoft signed binaries into the process.
 /* Increases protection by enforcing stricter binary signature policies at runtime.
 */
 disable_loadlibrary([this]() -> std::void_t<>
@@ -130,24 +135,24 @@ disable_loadlibrary([this]() -> std::void_t<>
 }),
 
 /*
-/* Checks the CPU's debug registers (DR0–DR7) for signs of hardware breakpoints. 
+/* Checks the CPU's debug registers (DR0–DR7) for signs of hardware breakpoints.
 /* If any are set, triggers a protection response to prevent debugging or tampering.
 */
 check_hardware_registers([this]() -> std::void_t<>
 {
-	CONTEXT ctx = { 0 };
+	CONTEXT ctx = {};
 	void* thread = GetCurrentThread();
 
 	ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
 	GetThreadContext(thread, &ctx);
-	if (((ctx.Dr0 != 0x00) || (ctx.Dr1 != 0x00) || (ctx.Dr2 != 0x00) || (ctx.Dr3 != 0x00) || (ctx.Dr6 != 0x00) || (ctx.Dr7 != 0x00)))
+	if (ctx.Dr0 != 0x00 || ctx.Dr1 != 0x00 || ctx.Dr2 != 0x00 || ctx.Dr3 != 0x00 || ctx.Dr6 != 0x00 || ctx.Dr7 != 0x00)
 	{
 		this->trigger();
 	}
 }),
 
 /*
-/* Detects if the process is running inside a remote desktop session. 
+/* Detects if the process is running inside a remote desktop session.
 /* If a remote session is detected, triggers a protection response to avoid remote debugging.
 */
 check_remote_session([this]() -> std::void_t<>
@@ -160,7 +165,7 @@ check_remote_session([this]() -> std::void_t<>
 }),
 
 /*
-/* Scans open windows for known debugger or reverse engineering tool signatures. 
+/* Scans open windows for known debugger or reverse engineering tool signatures.
 /* Triggers a security callback if a blacklisted window is detected.
 */
 check_windows([this]() -> std::void_t<>
@@ -193,12 +198,12 @@ check_windows([this]() -> std::void_t<>
 	for (auto& [first, second] : black_listed_windows)
 	{
 		if (FindWindowW(first, second))
-			this->security_callback(L"Malicious activity [Debugging attempt].");
+			this->trigger();
 	}
 }),
 
 /*
-/* Checks if the process is being debugged using several methods, including API calls and direct PEB access. 
+/* Checks if the process is being debugged using several methods, including API calls and direct PEB access.
 /* If a debugger is detected, the process will terminate immediately.
 */
 check_debuggers([this]() -> std::void_t<>
@@ -225,7 +230,7 @@ check_debuggers([this]() -> std::void_t<>
 }),
 
 /*
-/* Scans loaded modules for known blacklisted libraries commonly used for hooking or debugging. 
+/* Scans loaded modules for known blacklisted libraries commonly used for hooking or debugging.
 /* Triggers a security kill if any unauthorized module is found.
 */
 check_blacklisted_modules([this]() -> std::void_t<>
@@ -259,12 +264,12 @@ check_blacklisted_modules([this]() -> std::void_t<>
 }),
 
 /*
-/* Enumerates loaded kernel-mode drivers and checks against a blacklist of known malicious drivers. 
+/* Enumerates loaded kernel-mode drivers and checks against a blacklist of known malicious drivers.
 /* Helps detect and respond to tampering at the kernel level.
 */
 check_kernel_drivers([this]() -> std::void_t<>
 {
-	void* drivers[1024];
+	std::void_t<>* drivers[1024];
 	unsigned long needed;
 
 	if (K32EnumDeviceDrivers(drivers, sizeof(drivers), &needed) && needed < sizeof(drivers))
@@ -272,13 +277,12 @@ check_kernel_drivers([this]() -> std::void_t<>
 		wchar_t driver_buffer[1024];
 		const std::vector<std::wstring> driver_list = {
 			L"kprocesshacker.sys",
+			L"SystemInformer.sys",
 			L"npf.sys",
-			L"SbieSvc.sys",
 			L"HttpDebuggerSdk.sys",
 			L"dbk64.sys",
 			L"dbk32.sys",
 			L"SharpOD_Drv.sys",
-			L"vgk.sys",
 			L"SbieSvc.exe"
 		};
 
@@ -301,7 +305,7 @@ check_kernel_drivers([this]() -> std::void_t<>
 }),
 
 /*
-/* Queries system code integrity information to detect if Test Signing Mode or Debug Mode is enabled. 
+/* Queries system code integrity information to detect if Test Signing Mode or Debug Mode is enabled.
 /* Ensures that only production-signed drivers are active, and triggers security if a violation is found.
 */
 check_test_sign_mode([this]() -> std::void_t<>

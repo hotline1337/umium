@@ -1,4 +1,34 @@
-#pragma once
+/*
+ * Copyright 2022 - 2025 | hotline1337
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#ifndef UMIUM_HPP
+#define UMIUM_HPP
+
+#if defined(_M_X64) || defined(__amd64__) || defined(_M_IX86) || defined(__i386__)
+#include <Windows.h>
+#include <winternl.h>
+#include <Psapi.h>
+#else
+#error Unsupported platform
+#endif
+
+#include <functional>
+#include <fstream>
+#include <thread>
+#include <string>
 
 class umium
 {
@@ -8,24 +38,15 @@ private:
 		std::uint32_t m_size;
 		std::uint32_t m_options;
 	};
-
-	enum special_mode
-	{
-		test_sign_mode,
-		test_build_mode,
-		debugging_mode
-	};
-
 public:
 	umium();
 	std::function<bool()> start;
-	std::function<bool(const std::wstring&)> security_callback;
 protected:
 	std::function<std::void_t<>()> dispatch_threads;
 	std::function<std::void_t<>()> patch_debug_functions;
+	std::function<std::void_t<>()> change_image_size;
 private:
 	auto trigger() const -> std::void_t<>;
-
 	std::function<std::void_t<>()> disable_loadlibrary;
 	std::function<std::void_t<>()> check_hardware_registers;
 	std::function<std::void_t<>()> check_remote_session;
@@ -36,21 +57,5 @@ private:
 	std::function<std::void_t<>()> check_test_sign_mode;
 };
 
-struct active_object
-{
-	template <typename FN>
-	active_object(FN fn) : thread([this, fn] { while (alive) fn(); }) {}
-
-	~active_object()
-	{
-		alive = false;
-		thread.join();
-	}
-
-	active_object(const active_object&) = delete;
-	active_object(active_object&&) = delete;
-	active_object& operator=(active_object) = delete;
-
-	std::atomic<bool> alive{ true };
-	std::thread thread;
-};
+inline const auto umium = std::make_unique<class umium>();
+#endif
