@@ -55,11 +55,11 @@ trigger([this]() -> std::void_t<>
  */
 dispatch_threads([this]() -> std::void_t<>
 {
-	std::thread([&]
+	std::thread([this]
 	{
-		const auto ntdll_handle = GetModuleHandleW(L"ntdll.dll");
-		const auto nt_set_information_thread = reinterpret_cast<long(*)(void*, unsigned int, void*, unsigned long)>(GetProcAddress(ntdll_handle, "NtSetInformationThread"));
+		const auto nt_set_information_thread = reinterpret_cast<long(*)(void*, unsigned int, void*, unsigned long)>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetInformationThread"));
 		nt_set_information_thread(GetCurrentThread(), 0x11u, nullptr, 0);
+
 		while (true)
 		{
 			this->check_debuggers();
@@ -79,7 +79,7 @@ dispatch_threads([this]() -> std::void_t<>
 }),
 
 /*
- * Patches critical debug functions in `ntdll.dll` like `DbgUiRemoteBreakin`, `DbgBreakPoint`, and `NtContinue`.
+ * Patches critical debug functions in `ntdll.dll` like `DbgUiRemoteBreakin`, `DbgBreakPoint`.
  * Makes it harder for debuggers to attach or manipulate the process by forcing an exit if called.
  */
 patch_debug_functions([this]() -> std::void_t<>
@@ -377,12 +377,8 @@ check_hidden_thread([this]() -> std::void_t<>
 		alignas(4) bool value;
 	};
 
-	static const auto ntdll_handle = GetModuleHandleW(L"ntdll.dll");
-	if (!ntdll_handle)
-		return;
-
-	static const auto nt_set_information_thread = reinterpret_cast<long(*)(void*, unsigned int, void*, unsigned long)>(GetProcAddress(ntdll_handle, "NtSetInformationThread"));
-	static const auto nt_query_information_thread = reinterpret_cast<long(*)(void*, unsigned int, void*, unsigned long, unsigned long*)>(GetProcAddress(ntdll_handle, "NtQueryInformationThread"));
+	static const auto nt_set_information_thread = reinterpret_cast<long(*)(void*, unsigned int, void*, unsigned long)>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetInformationThread"));
+	static const auto nt_query_information_thread = reinterpret_cast<long(*)(void*, unsigned int, void*, unsigned long, unsigned long*)>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationThread"));
 
 	aligned_bool is_thread_hidden;
 	is_thread_hidden.value = false;
@@ -487,11 +483,7 @@ check_process_job([this]() -> std::void_t<>
 
 check_csr([this]() -> std::void_t<>
 {
-	static const auto ntdll_handle = GetModuleHandleW(L"ntdll.dll");
-	if (!ntdll_handle)
-		return;
-
-	static const auto csr_get_process_id = reinterpret_cast<void*(*)()>(GetProcAddress(ntdll_handle, "CsrGetProcessId"));
+	static const auto csr_get_process_id = reinterpret_cast<void*(*)()>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "CsrGetProcessId"));
 	if (!csr_get_process_id)
 		return;
 
@@ -511,8 +503,7 @@ check_test_sign_mode([this]() -> std::void_t<>
 	umium::code_integrity_information sci = {};
 	sci.m_size = sizeof(sci);
 
-	const static auto ntdll_handle = GetModuleHandleW(L"ntdll.dll");
-	const static auto nt_query_system_information = reinterpret_cast<long(*)(unsigned long, void*, unsigned long, unsigned long*)>(GetProcAddress(ntdll_handle, "NtQuerySystemInformation"));
+	const static auto nt_query_system_information = reinterpret_cast<long(*)(unsigned long, void*, unsigned long, unsigned long*)>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation"));
 
 	nt_query_system_information(SystemCodeIntegrityInformation, &sci, sizeof(sci), nullptr);
 	if (sci.m_options & CODEINTEGRITY_OPTION_TESTSIGN ||
