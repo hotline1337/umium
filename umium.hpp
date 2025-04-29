@@ -25,6 +25,7 @@
 #error Unsupported platform
 #endif
 
+#include <algorithm>
 #include <functional>
 #include <fstream>
 #include <thread>
@@ -42,13 +43,14 @@ public:
 	umium();
 	std::function<bool()> start;
 protected:
+	std::function<std::void_t<>()> trigger;
 	std::function<std::void_t<>()> dispatch_threads;
 	std::function<std::void_t<>()> patch_debug_functions;
 	std::function<std::void_t<>()> change_image_size;
+	std::function<std::void_t<>()> disable_loadlibrary;
 	std::function<std::void_t<>()> erase_pe_header;
 private:
-	auto trigger() const -> std::void_t<>;
-	std::function<std::void_t<>()> disable_loadlibrary;
+	std::function<std::void_t<>()> check_local_size;
 	std::function<std::void_t<>()> check_hardware_registers;
 	std::function<std::void_t<>()> check_remote_session;
 	std::function<std::void_t<>()> check_windows;
@@ -57,6 +59,7 @@ private:
 	std::function<std::void_t<>()> check_kernel_drivers;
 	std::function<std::void_t<>()> check_hidden_thread;
 	std::function<std::void_t<>()> check_process_job;
+	std::function<std::void_t<>()> check_csr;
 	std::function<std::void_t<>()> check_test_sign_mode;
 };
 

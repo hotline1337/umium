@@ -1,27 +1,11 @@
 #include "umium.hpp"
 
-/*
-/* Forcefully terminates the process using multiple methods to ensure it exits immediately.
-/* Acts as an emergency kill switch in case of security violations or debugging attempts.
-*/
-auto umium::trigger() const -> std::void_t<>
-{
-	while (true)
-	{
-		PostQuitMessage(0);
-		TerminateProcess(GetCurrentProcess(), 0u);
-		ExitThread(0ul);
-		ExitProcess(0u);
-		FatalExit(0);
-	}
-}
-
 umium::umium() :
 
-/*
-/* Initializes security mechanisms.
-/* Ensures early protection is active before any potential tampering occurs.
-*/
+ /*
+  * Initializes security mechanisms.
+  * Ensures early protection is active before any potential tampering occurs.
+  */
 start([this]() -> bool
 {
 	/* change base image size to prevent memory dumps */
@@ -42,16 +26,44 @@ start([this]() -> bool
 }),
 
 /*
-/* Dispatches multiple security monitoring threads to run periodic checks.
-/* Continuously validates system integrity and looks for signs of tampering or debugging.
-*/
+ * Forcefully terminates the process using multiple methods to ensure it exits immediately.
+ * Acts as an emergency kill switch in case of security violations or debugging attempts.
+ */
+trigger([this]() -> std::void_t<>
+{
+	static const auto rtl_raise_status = reinterpret_cast<void(*)(long)>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlRaiseStatus"));
+	static const auto nt_terminate_process = reinterpret_cast<long(*)(void*, long)>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtTerminateProcess"));
+	while (true)
+	{
+		*reinterpret_cast<unsigned long long*>(0xFFFFFFFFFFFFFFFFull) = 0xFFFFFFFFFFFFFFFFull;
+		rtl_raise_status(static_cast<long>(0xFFFFFFFFFFFFFFFFull));
+		nt_terminate_process(GetCurrentProcess(), static_cast<long>(0xFFFFFFFFFFFFFFFFull));
+		abort();
+		terminate();
+		PostQuitMessage(0);
+		TerminateProcess(GetCurrentProcess(), 0u);
+		ExitThread(0ul);
+		ExitProcess(0u);
+		FatalExit(0);
+		DebugBreak();
+	}
+}),
+
+/*
+ * Dispatches multiple security monitoring threads to run periodic checks.
+ * Continuously validates system integrity and looks for signs of tampering or debugging.
+ */
 dispatch_threads([this]() -> std::void_t<>
 {
 	std::thread([&]
 	{
+		const auto ntdll_handle = GetModuleHandleW(L"ntdll.dll");
+		const auto nt_set_information_thread = reinterpret_cast<long(*)(void*, unsigned int, void*, unsigned long)>(GetProcAddress(ntdll_handle, "NtSetInformationThread"));
+		nt_set_information_thread(GetCurrentThread(), 0x11u, nullptr, 0);
 		while (true)
 		{
 			this->check_debuggers();
+			this->check_local_size();
 			this->check_hardware_registers();
 			this->check_remote_session();
 			this->check_windows();
@@ -59,6 +71,7 @@ dispatch_threads([this]() -> std::void_t<>
 			this->check_blacklisted_modules();
 			this->check_hidden_thread();
 			this->check_process_job();
+			this->check_csr();
 			this->check_test_sign_mode();
 			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 		}
@@ -66,9 +79,9 @@ dispatch_threads([this]() -> std::void_t<>
 }),
 
 /*
-/* Patches critical debug functions in `ntdll.dll` like `DbgUiRemoteBreakin`, `DbgBreakPoint`, and `NtContinue`.
-/* Makes it harder for debuggers to attach or manipulate the process by forcing an exit if called.
-*/
+ * Patches critical debug functions in `ntdll.dll` like `DbgUiRemoteBreakin`, `DbgBreakPoint`, and `NtContinue`.
+ * Makes it harder for debuggers to attach or manipulate the process by forcing an exit if called.
+ */
 patch_debug_functions([this]() -> std::void_t<>
 {
 	const auto ntdll_handle = GetModuleHandleW(L"ntdll.dll");
@@ -99,9 +112,9 @@ patch_debug_functions([this]() -> std::void_t<>
 }),
 
 /*
-/* Modifies the image size field of the process's PEB loader entry.
-/* This obfuscates memory layout information to prevent memory scanners and debuggers.
-*/
+ * Modifies the image size field of the process's PEB loader entry.
+ * This obfuscates memory layout information to prevent memory scanners and debuggers.
+ */
 change_image_size([this]() -> std::void_t<>
 {
 	const auto peb = reinterpret_cast<PEB*>(__readgsqword(0x60));
@@ -112,9 +125,21 @@ change_image_size([this]() -> std::void_t<>
 }),
 
 /*
-/* Erases the PE (Portable Executable) headers of the current process from memory.
-/* Helps to hinder memory dumping and reverse engineering by removing key metadata from the loaded module.
-*/
+ * Disables the ability to load non-Microsoft signed binaries into the process.
+ * Increases protection by enforcing stricter binary signature policies at runtime.
+ */
+disable_loadlibrary([this]() -> std::void_t<>
+{
+	PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY policy = {};
+	policy.MicrosoftSignedOnly = 1;
+
+	SetProcessMitigationPolicy(ProcessSignaturePolicy, &policy, sizeof(policy));
+}),
+
+/*
+ * Erases the PE (Portable Executable) headers of the current process from memory.
+ * Helps to hinder memory dumping and reverse engineering by removing key metadata from the loaded module.
+ */
 erase_pe_header([this]() -> std::void_t<>
 {
 	const auto base_address = GetModuleHandleW(nullptr);
@@ -126,52 +151,52 @@ erase_pe_header([this]() -> std::void_t<>
 		return;
 
 	const auto nt_headers = reinterpret_cast<PIMAGE_NT_HEADERS64>(reinterpret_cast<uint8_t*>(base_address) + dos_header->e_lfanew);
+	const auto nt_headers_size = nt_headers->OptionalHeader.SizeOfHeaders;
 	if (nt_headers->Signature != IMAGE_NT_SIGNATURE)
 		return;
 
-	const auto size_of_headers = nt_headers->OptionalHeader.SizeOfHeaders;
-
 	unsigned long old_protection;
-	if (VirtualProtect(base_address, size_of_headers, PAGE_EXECUTE_READWRITE, &old_protection))
+	if (VirtualProtect(base_address, nt_headers_size, PAGE_EXECUTE_READWRITE, &old_protection))
 	{
-		RtlSecureZeroMemory(base_address, size_of_headers);
-		VirtualProtect(base_address, size_of_headers, old_protection, &old_protection);
+		RtlSecureZeroMemory(base_address, nt_headers_size);
+		VirtualProtect(base_address, nt_headers_size, old_protection, &old_protection);
 	}
 }),
 
 /*
-/* Disables the ability to load non-Microsoft signed binaries into the process.
-/* Increases protection by enforcing stricter binary signature policies at runtime.
-*/
-disable_loadlibrary([this]() -> std::void_t<>
+ * Repeatedly calls LocalSize on a null pointer to detect unusual behavior or potential heap manipulation.
+ * The function is meant to observe how the system responds to invalid memory queries.
+ */
+check_local_size([this]() -> std::void_t<>
 {
-	PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY policy = {};
-	policy.MicrosoftSignedOnly = 1;
-
-	SetProcessMitigationPolicy(ProcessSignaturePolicy, &policy, sizeof(policy));
+	unsigned long long buffer;
+	for (auto i = 0u; i < INFINITE; i++) 
+	{
+		buffer = LocalSize(nullptr);
+	}
 }),
 
 /*
-/* Checks the CPU's debug registers (DR0–DR7) for signs of hardware breakpoints.
-/* If any are set, triggers a protection response to prevent debugging or tampering.
-*/
+ * Checks the CPU's debug registers (DR0–DR7) for signs of hardware breakpoints.
+ * If any are set, triggers a protection response to prevent debugging or tampering.
+ */
 check_hardware_registers([this]() -> std::void_t<>
 {
 	CONTEXT ctx = {};
 	void* thread = GetCurrentThread();
 
-	ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+	ctx.ContextFlags = CONTEXT_ALL;
 	GetThreadContext(thread, &ctx);
-	if (ctx.Dr0 != 0x00 || ctx.Dr1 != 0x00 || ctx.Dr2 != 0x00 || ctx.Dr3 != 0x00 || ctx.Dr6 != 0x00 || ctx.Dr7 != 0x00)
+	if (ctx.Dr0 || ctx.Dr1 || ctx.Dr2 || ctx.Dr3 || ctx.Dr6 || ctx.Dr7)
 	{
 		this->trigger();
 	}
 }),
 
 /*
-/* Detects if the process is running inside a remote desktop session.
-/* If a remote session is detected, triggers a protection response to avoid remote debugging.
-*/
+ * Detects if the process is running inside a remote desktop session.
+ * If a remote session is detected, triggers a protection response to avoid remote debugging.
+ */
 check_remote_session([this]() -> std::void_t<>
 {
 	const auto session_metrics = GetSystemMetrics(SM_REMOTESESSION);
@@ -182,9 +207,9 @@ check_remote_session([this]() -> std::void_t<>
 }),
 
 /*
-/* Scans open windows for known debugger or reverse engineering tool signatures.
-/* Triggers a security callback if a blacklisted window is detected.
-*/
+ * Scans open windows for known debugger or reverse engineering tool signatures.
+ * Triggers a security callback if a blacklisted window is detected.
+ */
 check_windows([this]() -> std::void_t<>
 {
 	using window_params = std::pair<const wchar_t*, const wchar_t*>;
@@ -220,9 +245,9 @@ check_windows([this]() -> std::void_t<>
 }),
 
 /*
-/* Checks if the process is being debugged using several methods, including API calls and direct PEB access.
-/* If a debugger is detected, the process will terminate immediately.
-*/
+ * Checks if the process is being debugged using several methods, including API calls and direct PEB access.
+ * If a debugger is detected, the process will terminate immediately.
+ */
 check_debuggers([this]() -> std::void_t<>
 {
 	auto is_dbg_present = FALSE;
@@ -247,11 +272,13 @@ check_debuggers([this]() -> std::void_t<>
 }),
 
 /*
-/* Scans loaded modules for known blacklisted libraries commonly used for hooking or debugging.
-/* Triggers a security kill if any unauthorized module is found.
-*/
+ * Scans loaded modules for known blacklisted libraries commonly used for hooking or debugging.
+ * Triggers a security kill if any unauthorized module is found.
+ */
 check_blacklisted_modules([this]() -> std::void_t<>
 {
+	HMODULE modules[0x400] = {};
+	unsigned long needed;
 	const std::vector<std::wstring> blacklisted_modules = {
 		L"vehdebug-x86_64.dll",
 		L"winhook-x86_64.dll",
@@ -278,12 +305,30 @@ check_blacklisted_modules([this]() -> std::void_t<>
 			this->trigger();
 		}
 	}
+
+	if (K32EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &needed)) 
+	{
+		for (auto i = 0ull; i < needed / sizeof(HMODULE); i++) 
+		{
+			wchar_t module_name[MAX_PATH];
+			if (K32GetModuleFileNameExW(GetCurrentProcess(), modules[i], module_name, MAX_PATH)) 
+			{
+				for (const auto& module : blacklisted_modules)
+				{
+					if (std::wstring_view(module_name).contains(module))
+					{
+						this->trigger();
+					}
+				}
+			}
+		}
+	}
 }),
 
 /*
-/* Enumerates loaded kernel-mode drivers and checks against a blacklist of known malicious drivers.
-/* Helps detect and respond to tampering at the kernel level.
-*/
+ * Enumerates loaded kernel-mode drivers and checks against a blacklist of known malicious drivers.
+ * Helps detect and respond to tampering at the kernel level.
+ */
 check_kernel_drivers([this]() -> std::void_t<>
 {
 	std::void_t<>* drivers[1024];
@@ -322,9 +367,9 @@ check_kernel_drivers([this]() -> std::void_t<>
 }),
 
 /*
-/* Detects attempts to hide the current thread from debuggers using NtSetInformationThread and NtQueryInformationThread.
-/* Triggers a security response if thread hiding is possible or inconsistencies in thread info are detected.
-*/
+ * Detects attempts to hide the current thread from debuggers using NtSetInformationThread and NtQueryInformationThread.
+ * Triggers a security response if thread hiding is possible or inconsistencies in thread info are detected.
+ */
 check_hidden_thread([this]() -> std::void_t<>
 {
 	struct aligned_bool
@@ -342,11 +387,11 @@ check_hidden_thread([this]() -> std::void_t<>
 	aligned_bool is_thread_hidden;
 	is_thread_hidden.value = false;
 
-	NTSTATUS status = nt_set_information_thread(GetCurrentThread(), 0x11u, &is_thread_hidden, 12345);
+	long status = nt_set_information_thread(GetCurrentThread(), 0x11u, &is_thread_hidden, 12345);
 	if (status == 0)
 		this->trigger();
 
-	status = nt_set_information_thread(reinterpret_cast<HANDLE>(0xFFFF), 0x11u, nullptr, 0);
+	status = nt_set_information_thread(reinterpret_cast<void*>(0xFFFF), 0x11u, nullptr, 0);
 	if (status == 0)
 		this->trigger();
 
@@ -400,76 +445,76 @@ check_hidden_thread([this]() -> std::void_t<>
  */
 check_process_job([this]() -> std::void_t<>
 {
-	auto found_problem = FALSE;
+	auto job_found = FALSE;
+	constexpr unsigned long job_process_struct_size = sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) + sizeof(unsigned long long) * 0x400;
 
-	constexpr unsigned long job_process_struct_size = sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) + sizeof(unsigned long long) * 1024;
-	const auto job_process_id_list = static_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(malloc(job_process_struct_size));
-
-	if (job_process_id_list) 
+	std::vector<std::byte> job_process_buffer(job_process_struct_size, std::byte{});
+	if (auto* job_process_id_list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(job_process_buffer.data()))
 	{
-		RtlSecureZeroMemory(job_process_id_list, job_process_struct_size);
-		job_process_id_list->NumberOfProcessIdsInList = 1024;
+		job_process_id_list->NumberOfProcessIdsInList = 0x400ul;
 
-		if (QueryInformationJobObject(nullptr, JobObjectBasicProcessIdList, job_process_id_list, job_process_struct_size, nullptr))
+		if (QueryInformationJobObject(nullptr, JobObjectBasicProcessIdList, job_process_id_list, static_cast<unsigned long>(job_process_buffer.size()), nullptr))
 		{
-			int ok_processes = 0;
-			for (unsigned long i = 0; i < job_process_id_list->NumberOfAssignedProcesses; i++)
+			auto whitelisted_processes = 0;
+			for (auto i = 0ul; i < job_process_id_list->NumberOfAssignedProcesses; i++)
 			{
-				const unsigned long long process_id = job_process_id_list->ProcessIdList[i];
-
-				if (process_id == static_cast<unsigned long long>(GetCurrentProcessId()))
+				if (const unsigned long long process_id = job_process_id_list->ProcessIdList[i]; process_id == static_cast<unsigned long long>(GetCurrentProcessId()))
 				{
-					ok_processes++;
+					whitelisted_processes++;
 				}
 				else
 				{
-					const auto h_job_process = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, static_cast<unsigned long>(process_id));
-					if (h_job_process != nullptr)
+					if (auto job_process_handle = std::unique_ptr<std::remove_pointer_t<HANDLE>, decltype(&CloseHandle)>(OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, static_cast<unsigned long>(process_id)), CloseHandle))
 					{
-						constexpr int process_name_buffer_size = 4096;
-						auto process_name = static_cast<char*>(malloc(sizeof(char) * process_name_buffer_size));
-						if (process_name) 
+						std::vector<wchar_t> process_name(0x1000);
+						if (K32GetProcessImageFileNameW(job_process_handle.get(), process_name.data(), static_cast<unsigned long>(process_name.size())) > 0)
 						{
-							RtlSecureZeroMemory(process_name, sizeof(char) * process_name_buffer_size);
-							if (K32GetProcessImageFileNameA(h_job_process, process_name, process_name_buffer_size) > 0)
+							if (std::wstring pn_str(process_name.data()); pn_str.contains(L"\\Windows\\System32\\conhost.exe"))
 							{
-								std::string pn_str(process_name);
-								if (pn_str.find(std::string("\\Windows\\System32\\conhost.exe")) != std::string::npos)
-								{
-									ok_processes++;
-								}
+								whitelisted_processes++;
 							}
-							free(process_name);
 						}
-						CloseHandle(h_job_process);
 					}
 				}
 			}
-			// if we found other processes in the job other than the current process and conhost, report a problem
-			found_problem = ok_processes != job_process_id_list->NumberOfAssignedProcesses;
+			job_found = static_cast<unsigned long>(whitelisted_processes) != job_process_id_list->NumberOfAssignedProcesses;
 		}
-		free(job_process_id_list);
 	}
-	if (found_problem)
+
+	if (job_found)
 		this->trigger();
 }),
 
+check_csr([this]() -> std::void_t<>
+{
+	static const auto ntdll_handle = GetModuleHandleW(L"ntdll.dll");
+	if (!ntdll_handle)
+		return;
+
+	static const auto csr_get_process_id = reinterpret_cast<void*(*)()>(GetProcAddress(ntdll_handle, "CsrGetProcessId"));
+	if (!csr_get_process_id)
+		return;
+
+	const auto handle = OpenProcess(PROCESS_ALL_ACCESS, FALSE, reinterpret_cast<unsigned long>(csr_get_process_id()));
+	if (!handle)
+	{
+		this->trigger();
+	}
+}),
+
 /*
-/* Queries system code integrity information to detect if Test Signing Mode or Debug Mode is enabled.
-/* Ensures that only production-signed drivers are active, and triggers security if a violation is found.
-*/
+ * Queries system code integrity information to detect if Test Signing Mode or Debug Mode is enabled.
+ * Ensures that only production-signed drivers are active, and triggers security if a violation is found.
+ */
 check_test_sign_mode([this]() -> std::void_t<>
 {
 	umium::code_integrity_information sci = {};
 	sci.m_size = sizeof(sci);
 
-	/* find syscall */
 	const static auto ntdll_handle = GetModuleHandleW(L"ntdll.dll");
-	const static auto nt_query_system_information = reinterpret_cast<long(__stdcall*)(unsigned long, void*, unsigned long, unsigned long*)>(GetProcAddress(ntdll_handle, "NtQuerySystemInformation"));
+	const static auto nt_query_system_information = reinterpret_cast<long(*)(unsigned long, void*, unsigned long, unsigned long*)>(GetProcAddress(ntdll_handle, "NtQuerySystemInformation"));
 
-	/* query system information */
 	nt_query_system_information(SystemCodeIntegrityInformation, &sci, sizeof(sci), nullptr);
-
 	if (sci.m_options & CODEINTEGRITY_OPTION_TESTSIGN ||
 		sci.m_options & CODEINTEGRITY_OPTION_DEBUGMODE_ENABLED ||
 		sci.m_options & CODEINTEGRITY_OPTION_TEST_BUILD)
