@@ -1,19 +1,3 @@
-/*
- * Copyright 2022 - 2025 | hotline1337
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 #include "umium.hpp"
 
 /*
@@ -51,6 +35,9 @@ start([this]() -> bool
 
 	/* disable LoadLibrary */
 	this->disable_loadlibrary();
+
+	/* erase pe header */
+	this->erase_pe_header();
 	return true;
 }),
 
@@ -70,6 +57,8 @@ dispatch_threads([this]() -> std::void_t<>
 			this->check_windows();
 			this->check_kernel_drivers();
 			this->check_blacklisted_modules();
+			this->check_hidden_thread();
+			this->check_process_job();
 			this->check_test_sign_mode();
 			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 		}
@@ -120,6 +109,34 @@ change_image_size([this]() -> std::void_t<>
 	const auto table_entry = reinterpret_cast<LDR_DATA_TABLE_ENTRY*>(reinterpret_cast<char*>(load_order) - reinterpret_cast<unsigned long long>(&static_cast<LDR_DATA_TABLE_ENTRY*>(nullptr)->Reserved1[0]));
 	const auto entry_size = reinterpret_cast<unsigned long*>(&table_entry->Reserved3[1]);
 	*entry_size = static_cast<unsigned long>(reinterpret_cast<long long>(table_entry->DllBase) + 0x100000);
+}),
+
+/*
+/* Erases the PE (Portable Executable) headers of the current process from memory.
+/* Helps to hinder memory dumping and reverse engineering by removing key metadata from the loaded module.
+*/
+erase_pe_header([this]() -> std::void_t<>
+{
+	const auto base_address = GetModuleHandleW(nullptr);
+	if (!base_address)
+		return;
+
+	const auto dos_header = reinterpret_cast<PIMAGE_DOS_HEADER>(base_address);
+	if (dos_header->e_magic != IMAGE_DOS_SIGNATURE)
+		return;
+
+	const auto nt_headers = reinterpret_cast<PIMAGE_NT_HEADERS64>(reinterpret_cast<uint8_t*>(base_address) + dos_header->e_lfanew);
+	if (nt_headers->Signature != IMAGE_NT_SIGNATURE)
+		return;
+
+	const auto size_of_headers = nt_headers->OptionalHeader.SizeOfHeaders;
+
+	unsigned long old_protection;
+	if (VirtualProtect(base_address, size_of_headers, PAGE_EXECUTE_READWRITE, &old_protection))
+	{
+		RtlSecureZeroMemory(base_address, size_of_headers);
+		VirtualProtect(base_address, size_of_headers, old_protection, &old_protection);
+	}
 }),
 
 /*
@@ -302,6 +319,139 @@ check_kernel_drivers([this]() -> std::void_t<>
 			}
 		}
 	}
+}),
+
+/*
+/* Detects attempts to hide the current thread from debuggers using NtSetInformationThread and NtQueryInformationThread.
+/* Triggers a security response if thread hiding is possible or inconsistencies in thread info are detected.
+*/
+check_hidden_thread([this]() -> std::void_t<>
+{
+	struct aligned_bool
+	{
+		alignas(4) bool value;
+	};
+
+	static const auto ntdll_handle = GetModuleHandleW(L"ntdll.dll");
+	if (!ntdll_handle)
+		return;
+
+	static const auto nt_set_information_thread = reinterpret_cast<long(*)(void*, unsigned int, void*, unsigned long)>(GetProcAddress(ntdll_handle, "NtSetInformationThread"));
+	static const auto nt_query_information_thread = reinterpret_cast<long(*)(void*, unsigned int, void*, unsigned long, unsigned long*)>(GetProcAddress(ntdll_handle, "NtQueryInformationThread"));
+
+	aligned_bool is_thread_hidden;
+	is_thread_hidden.value = false;
+
+	NTSTATUS status = nt_set_information_thread(GetCurrentThread(), 0x11u, &is_thread_hidden, 12345);
+	if (status == 0)
+		this->trigger();
+
+	status = nt_set_information_thread(reinterpret_cast<HANDLE>(0xFFFF), 0x11u, nullptr, 0);
+	if (status == 0)
+		this->trigger();
+
+	status = nt_set_information_thread(GetCurrentThread(), 0x11u, nullptr, 0);
+
+	if (status == 0)
+	{
+		status = nt_query_information_thread(GetCurrentThread(), 0x11u, &is_thread_hidden.value, sizeof(bool), nullptr);
+		if (status == 0xC0000004ul)
+			this->trigger();
+
+		if (status == 0)
+		{
+			aligned_bool bogus_is_thread_hidden;
+			bogus_is_thread_hidden.value = false;
+
+			status = nt_query_information_thread(GetCurrentThread(), 0x11u, &bogus_is_thread_hidden.value, sizeof(int), nullptr);
+			if (status != 0xC0000004ul)
+				this->trigger();
+
+			constexpr size_t unaligned_check_count = 8;
+			bool bogus_unaligned_values[unaligned_check_count];
+			int alignment_error_count = 0;
+
+			constexpr size_t max_alignment_check_success_count = 2;
+			for (bool& bogus_unaligned_value : bogus_unaligned_values)
+			{
+				status = nt_query_information_thread(GetCurrentThread(), 0x11u, &bogus_unaligned_value, sizeof(int), nullptr);
+				if (status == 0x80000002ul)
+				{
+					alignment_error_count++;
+				}
+			}
+			
+			if (unaligned_check_count - max_alignment_check_success_count > alignment_error_count)
+				this->trigger();
+
+			if (!is_thread_hidden.value)
+				this->trigger();
+		}
+	}
+	else
+	{
+		this->trigger();
+	}
+}),
+
+/*
+ * Verifies the current process's job object to detect suspicious process inclusion.
+ * This check is useful for detecting sandbox environments or job-based process manipulation.
+ */
+check_process_job([this]() -> std::void_t<>
+{
+	auto found_problem = FALSE;
+
+	constexpr unsigned long job_process_struct_size = sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) + sizeof(unsigned long long) * 1024;
+	const auto job_process_id_list = static_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(malloc(job_process_struct_size));
+
+	if (job_process_id_list) 
+	{
+		RtlSecureZeroMemory(job_process_id_list, job_process_struct_size);
+		job_process_id_list->NumberOfProcessIdsInList = 1024;
+
+		if (QueryInformationJobObject(nullptr, JobObjectBasicProcessIdList, job_process_id_list, job_process_struct_size, nullptr))
+		{
+			int ok_processes = 0;
+			for (unsigned long i = 0; i < job_process_id_list->NumberOfAssignedProcesses; i++)
+			{
+				const unsigned long long process_id = job_process_id_list->ProcessIdList[i];
+
+				if (process_id == static_cast<unsigned long long>(GetCurrentProcessId()))
+				{
+					ok_processes++;
+				}
+				else
+				{
+					const auto h_job_process = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, static_cast<unsigned long>(process_id));
+					if (h_job_process != nullptr)
+					{
+						constexpr int process_name_buffer_size = 4096;
+						auto process_name = static_cast<char*>(malloc(sizeof(char) * process_name_buffer_size));
+						if (process_name) 
+						{
+							RtlSecureZeroMemory(process_name, sizeof(char) * process_name_buffer_size);
+							if (K32GetProcessImageFileNameA(h_job_process, process_name, process_name_buffer_size) > 0)
+							{
+								std::string pn_str(process_name);
+								if (pn_str.find(std::string("\\Windows\\System32\\conhost.exe")) != std::string::npos)
+								{
+									ok_processes++;
+								}
+							}
+							free(process_name);
+						}
+						CloseHandle(h_job_process);
+					}
+				}
+			}
+			// if we found other processes in the job other than the current process and conhost, report a problem
+			found_problem = ok_processes != job_process_id_list->NumberOfAssignedProcesses;
+		}
+		free(job_process_id_list);
+	}
+	if (found_problem)
+		this->trigger();
 }),
 
 /*

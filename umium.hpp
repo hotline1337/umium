@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 - 2025 | hotline1337
+ * Copyright 2022 - 2022 | hotline1337
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -45,6 +45,7 @@ protected:
 	std::function<std::void_t<>()> dispatch_threads;
 	std::function<std::void_t<>()> patch_debug_functions;
 	std::function<std::void_t<>()> change_image_size;
+	std::function<std::void_t<>()> erase_pe_header;
 private:
 	auto trigger() const -> std::void_t<>;
 	std::function<std::void_t<>()> disable_loadlibrary;
@@ -54,8 +55,11 @@ private:
 	std::function<std::void_t<>()> check_debuggers;
 	std::function<std::void_t<>()> check_blacklisted_modules;
 	std::function<std::void_t<>()> check_kernel_drivers;
+	std::function<std::void_t<>()> check_hidden_thread;
+	std::function<std::void_t<>()> check_process_job;
 	std::function<std::void_t<>()> check_test_sign_mode;
 };
 
 inline const auto umium = std::make_unique<class umium>();
+
 #endif
