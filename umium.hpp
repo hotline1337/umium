@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 - 2022 | hotline1337
+ * Copyright 2022 - 2025 | hotline1337
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -49,7 +49,6 @@ protected:
 	std::function<std::void_t<>()> disable_loadlibrary;
 	std::function<std::void_t<>()> erase_pe_header;
 private:
-	std::function<std::void_t<>()> check_local_size;
 	std::function<std::void_t<>()> check_hardware_registers;
 	std::function<std::void_t<>()> check_remote_session;
 	std::function<std::void_t<>()> check_windows;
@@ -59,6 +58,7 @@ private:
 	std::function<std::void_t<>()> check_hidden_thread;
 	std::function<std::void_t<>()> check_process_job;
 	std::function<std::void_t<>()> check_csr;
+	std::function<std::void_t<>()> check_local_size;
 	std::function<std::void_t<>()> check_test_sign_mode;
 };
 

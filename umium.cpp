@@ -1,3 +1,19 @@
+/*
+ * Copyright 2022 - 2025 | hotline1337
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "umium.hpp"
 
 umium::umium() :
@@ -35,7 +51,7 @@ trigger([this]() -> std::void_t<>
 	static const auto nt_terminate_process = reinterpret_cast<long(*)(void*, long)>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtTerminateProcess"));
 	while (true)
 	{
-		*reinterpret_cast<unsigned long long*>(0xFFFFFFFFFFFFFFFFull) = 0xFFFFFFFFFFFFFFFFull;
+		*reinterpret_cast<uintptr_t*>(0xFFFFFFFFFFFFFFFFull) = 0xFFFFFFFFFFFFFFFFull;
 		rtl_raise_status(static_cast<long>(0xFFFFFFFFFFFFFFFFull));
 		nt_terminate_process(GetCurrentProcess(), static_cast<long>(0xFFFFFFFFFFFFFFFFull));
 		abort();
@@ -57,13 +73,12 @@ dispatch_threads([this]() -> std::void_t<>
 {
 	std::thread([this]
 	{
-		const auto nt_set_information_thread = reinterpret_cast<long(*)(void*, unsigned int, void*, unsigned long)>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetInformationThread"));
+		static const auto nt_set_information_thread = reinterpret_cast<long(*)(void*, unsigned int, void*, unsigned long)>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetInformationThread"));
 		nt_set_information_thread(GetCurrentThread(), 0x11u, nullptr, 0);
 
 		while (true)
 		{
 			this->check_debuggers();
-			this->check_local_size();
 			this->check_hardware_registers();
 			this->check_remote_session();
 			this->check_windows();
@@ -72,6 +87,7 @@ dispatch_threads([this]() -> std::void_t<>
 			this->check_hidden_thread();
 			this->check_process_job();
 			this->check_csr();
+			this->check_local_size();
 			this->check_test_sign_mode();
 			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 		}
@@ -84,12 +100,8 @@ dispatch_threads([this]() -> std::void_t<>
  */
 patch_debug_functions([this]() -> std::void_t<>
 {
-	const auto ntdll_handle = GetModuleHandleW(L"ntdll.dll");
-	if (!ntdll_handle)
-		return;
-
-	const FARPROC p_dbg_break_point = GetProcAddress(ntdll_handle, "DbgBreakPoint");
-	const FARPROC p_dbg_ui_remote_breakin = GetProcAddress(ntdll_handle, "DbgUiRemoteBreakin");
+	const FARPROC p_dbg_break_point = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "DbgBreakPoint");
+	const FARPROC p_dbg_ui_remote_breakin = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "DbgUiRemoteBreakin");
 	if (!p_dbg_break_point || !p_dbg_ui_remote_breakin)
 		return;
 
@@ -119,9 +131,9 @@ change_image_size([this]() -> std::void_t<>
 {
 	const auto peb = reinterpret_cast<PEB*>(__readgsqword(0x60));
 	const auto load_order = static_cast<LIST_ENTRY*>(peb->Ldr->Reserved2[1]);
-	const auto table_entry = reinterpret_cast<LDR_DATA_TABLE_ENTRY*>(reinterpret_cast<char*>(load_order) - reinterpret_cast<unsigned long long>(&static_cast<LDR_DATA_TABLE_ENTRY*>(nullptr)->Reserved1[0]));
+	const auto table_entry = reinterpret_cast<LDR_DATA_TABLE_ENTRY*>(reinterpret_cast<char*>(load_order) - reinterpret_cast<uintptr_t>(&static_cast<LDR_DATA_TABLE_ENTRY*>(nullptr)->Reserved1[0]));
 	const auto entry_size = reinterpret_cast<unsigned long*>(&table_entry->Reserved3[1]);
-	*entry_size = static_cast<unsigned long>(reinterpret_cast<long long>(table_entry->DllBase) + 0x100000);
+	*entry_size = static_cast<unsigned long>(reinterpret_cast<int64_t>(table_entry->DllBase) + 0x100000);
 }),
 
 /*
@@ -164,26 +176,13 @@ erase_pe_header([this]() -> std::void_t<>
 }),
 
 /*
- * Repeatedly calls LocalSize on a null pointer to detect unusual behavior or potential heap manipulation.
- * The function is meant to observe how the system responds to invalid memory queries.
- */
-check_local_size([this]() -> std::void_t<>
-{
-	unsigned long long buffer;
-	for (auto i = 0u; i < INFINITE; i++) 
-	{
-		buffer = LocalSize(nullptr);
-	}
-}),
-
-/*
  * Checks the CPU's debug registers (DR0–DR7) for signs of hardware breakpoints.
  * If any are set, triggers a protection response to prevent debugging or tampering.
  */
 check_hardware_registers([this]() -> std::void_t<>
 {
 	CONTEXT ctx = {};
-	void* thread = GetCurrentThread();
+	auto* thread = GetCurrentThread();
 
 	ctx.ContextFlags = CONTEXT_ALL;
 	GetThreadContext(thread, &ctx);
@@ -214,9 +213,9 @@ check_windows([this]() -> std::void_t<>
 {
 	using window_params = std::pair<const wchar_t*, const wchar_t*>;
 	static std::vector<window_params> black_listed_windows = {
-		{L"ID",				L"Immunity"},
-		{L"Qt5QWindowIcon",	L"x64dbg"},
-		{L"Qt5QWindowIcon",	L"The Wireshark Network Analyzer"},
+		{L"ID", L"Immunity"},
+		{L"Qt5QWindowIcon", L"x64dbg"},
+		{L"Qt5QWindowIcon", L"The Wireshark Network Analyzer"},
 		{L"Chrome_WidgetWin_1", L"Fiddler Everywhere"},
 		{nullptr, L"Progress Telerik Fiddler Web Debugger"},
 		{L"Qt5153QTQWindowIcon", nullptr},
@@ -250,12 +249,12 @@ check_windows([this]() -> std::void_t<>
  */
 check_debuggers([this]() -> std::void_t<>
 {
-	auto is_dbg_present = FALSE;
 	if (IsDebuggerPresent())
 	{
 		this->trigger();
 	}
 
+	auto is_dbg_present = FALSE;
 	if (CheckRemoteDebuggerPresent(GetCurrentProcess(), &is_dbg_present))
 	{
 		if (is_dbg_present)
@@ -345,7 +344,8 @@ check_kernel_drivers([this]() -> std::void_t<>
 			L"dbk64.sys",
 			L"dbk32.sys",
 			L"SharpOD_Drv.sys",
-			L"SbieSvc.exe"
+			L"SbieSvc.exe",
+			L"TitanHide.sys"
 		};
 
 		const int driver_count = needed / sizeof(drivers[0]);
@@ -358,7 +358,6 @@ check_kernel_drivers([this]() -> std::void_t<>
 					if (std::wstring_view(driver_buffer) == driver_name)
 					{
 						this->trigger();
-						return;
 					}
 				}
 			}
@@ -442,7 +441,7 @@ check_hidden_thread([this]() -> std::void_t<>
 check_process_job([this]() -> std::void_t<>
 {
 	auto job_found = FALSE;
-	constexpr unsigned long job_process_struct_size = sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) + sizeof(unsigned long long) * 0x400;
+	constexpr unsigned long job_process_struct_size = sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) + sizeof(uintptr_t) * 0x400;
 
 	std::vector<std::byte> job_process_buffer(job_process_struct_size, std::byte{});
 	if (auto* job_process_id_list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(job_process_buffer.data()))
@@ -454,7 +453,7 @@ check_process_job([this]() -> std::void_t<>
 			auto whitelisted_processes = 0;
 			for (auto i = 0ul; i < job_process_id_list->NumberOfAssignedProcesses; i++)
 			{
-				if (const unsigned long long process_id = job_process_id_list->ProcessIdList[i]; process_id == static_cast<unsigned long long>(GetCurrentProcessId()))
+				if (const uintptr_t process_id = job_process_id_list->ProcessIdList[i]; process_id == static_cast<uintptr_t>(GetCurrentProcessId()))
 				{
 					whitelisted_processes++;
 				}
@@ -487,11 +486,24 @@ check_csr([this]() -> std::void_t<>
 	if (!csr_get_process_id)
 		return;
 
-	const auto handle = OpenProcess(PROCESS_ALL_ACCESS, FALSE, reinterpret_cast<unsigned long>(csr_get_process_id()));
-	if (!handle)
+	const auto handle = std::unique_ptr<std::remove_pointer_t<HANDLE>, decltype(&CloseHandle)>(OpenProcess(PROCESS_ALL_ACCESS, FALSE, reinterpret_cast<unsigned long>(csr_get_process_id())), CloseHandle);
+	if (!handle.get())
 	{
 		this->trigger();
 	}
+}),
+
+/*
+ * Repeatedly calls LocalSize on a null pointer to detect unusual behavior or potential heap manipulation.
+ * The function is meant to observe how the system responds to invalid memory queries.
+ */
+ check_local_size([this]() -> std::void_t<>
+ {
+	 uintptr_t buffer;
+	 for (auto i = 0u; i < INFINITE; i++)
+	 {
+		 buffer = LocalSize(nullptr);
+	 }
 }),
 
 /*
@@ -503,7 +515,7 @@ check_test_sign_mode([this]() -> std::void_t<>
 	umium::code_integrity_information sci = {};
 	sci.m_size = sizeof(sci);
 
-	const static auto nt_query_system_information = reinterpret_cast<long(*)(unsigned long, void*, unsigned long, unsigned long*)>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation"));
+	static const auto nt_query_system_information = reinterpret_cast<long(*)(unsigned long, void*, unsigned long, unsigned long*)>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation"));
 
 	nt_query_system_information(SystemCodeIntegrityInformation, &sci, sizeof(sci), nullptr);
 	if (sci.m_options & CODEINTEGRITY_OPTION_TESTSIGN ||
