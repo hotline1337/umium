@@ -2,7 +2,7 @@
   <img width="256" heigth="256" src="docs\bg.png">
 <h1 align="center">Umium</h1>
 <p align="center">
-  <strong>Umium</strong> is a library containing Anti-RE and Anti-Debug methods. Easy to use and easy to implement.
+  <strong>Umium</strong> is a security-focused anti-debugging and anti-reverse engineering library designed for high-resilience Windows applications. It uses a combination of undocumented Windows NT system functions and advanced runtime modifications to detect and neutralize debugging, memory tampering, or sandboxing attempts.
 </p>
 </p>
 <p align="center">
